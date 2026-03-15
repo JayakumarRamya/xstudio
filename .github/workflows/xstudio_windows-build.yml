@@ -1,0 +1,67 @@
+name: Windows xSTUDIO Package Build
+
+on:
+  push:
+    branches: [ "develop", "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-2022
+
+    steps:
+    - name: Checkout repository and submodules
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
+
+    - name: Apply OpenTimelineIO Patch
+      run: git apply cmake/otio_patch.diff
+
+    - name: Install NSIS (For Packaging)
+      run: choco install nsis -y
+
+    - name: Set up Python 3.11
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install Qt 6.5.3
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '6.5.3'
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2019_64'
+
+    - name: Setup vcpkg and Cache
+      uses: lukka/run-vcpkg@v11
+      with:
+        vcpkgDirectory: '${{ github.workspace }}/vcpkg'
+        # This handles the git clone and bootstrap-vcpkg.bat automatically, 
+        # while caching the heavy ffmpeg binaries for future runs.
+
+    - name: Inject Qt6_DIR into CMakePresets.json
+      shell: pwsh
+      run: |
+        # Automatically replaces the empty Qt6_DIR path with the one from the jurplel action
+        $path = "CMakePresets.json"
+        $qtDir = $env:Qt6_DIR.Replace('\', '/')
+        (Get-Content $path) -replace '"Qt6_DIR":\s*".*"', "`"Qt6_DIR`": `"$qtDir`"" | Set-Content $path
+
+    - name: Configure CMake
+      run: cmake -B build --preset WinRelease
+      env:
+        VCPKG_ROOT: ${{ github.workspace }}\vcpkg
+
+    - name: Build and Package xSTUDIO
+      run: cmake --build build --parallel 4 --target PACKAGE --config Release
+      # GitHub Actions standard runners have 4 cores, so we use --parallel 4
+
+    - name: Upload Windows Installer
+      uses: actions/upload-artifact@v4
+      with:
+        name: xSTUDIO-Windows-Installer
+        path: build/xSTUDIO-*.exe # Grabs the generated NSIS installer
+        retention-days: 7
